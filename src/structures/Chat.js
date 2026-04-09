@@ -224,9 +224,14 @@ class Chat extends Base {
 
                 if (searchOptions && searchOptions.limit > 0) {
                     while (msgs.length < searchOptions.limit) {
-                        const loadedMessages = await window
-                            .require('WAWebChatLoadMessages')
-                            .loadEarlierMsgs(chat, chat.msgs);
+                        let loadedMessages;
+                        try {
+                            loadedMessages = await window
+                                .require('WAWebChatLoadMessages')
+                                .loadEarlierMsgs(chat, chat.msgs);
+                        } catch (_) {
+                            break;
+                        }
                         if (!loadedMessages || !loadedMessages.length) break;
                         msgs = [...loadedMessages.filter(msgFilter), ...msgs];
                     }

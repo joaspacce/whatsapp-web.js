@@ -861,13 +861,18 @@ exports.LoadUtils = () => {
                 chat = null;
             }
         } else {
-            chat =
-                window.require('WAWebCollections').Chat.get(chatWid) ||
-                (
-                    await window
-                        .require('WAWebFindChatAction')
-                        .findOrCreateLatestChat(chatWid)
-                )?.chat;
+            chat = window.require('WAWebCollections').Chat.get(chatWid);
+            if (!chat) {
+                try {
+                    chat = (
+                        await window
+                            .require('WAWebFindChatAction')
+                            .findOrCreateLatestChat(chatWid)
+                    )?.chat;
+                } catch (_) {
+                    chat = null;
+                }
+            }
         }
 
         return getAsModel && chat
