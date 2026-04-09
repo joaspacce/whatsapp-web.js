@@ -220,66 +220,74 @@ class Chat extends Base {
                 const chat = await window.WWebJS.getChat(chatId, {
                     getAsModel: false,
                 });
-                const chatLoadMod = window.require('WAWebChatLoadMessages');
-                console.log('[wwebjs] chatLoadMod keys:', Object.keys(chatLoadMod));
+                // Bypass broken WAWebChatLoadMessages entirely.
+                // All 3 functions (loadRecentMsgs, loadEarlierMsgs, loadMsgsPromiseLoop)
+                // crash on different missing internal deps in current WhatsApp Web.
+                // Instead, query the global Msg collection and IDB directly.
 
-                // Debug: inspect chat.msgs collection methods
+                // Strategy A: Get messages from global WAWebCollections.Msg
+                let msgs = [];
                 try {
-                    const proto = Object.getPrototypeOf(chat.msgs);
-                    const methods = Object.getOwnPropertyNames(proto).filter(k => typeof chat.msgs[k] === 'function');
-                    console.log('[wwebjs] chat.msgs methods (' + methods.length + '):', methods.slice(0, 30).join(', '));
-                    console.log('[wwebjs] chat.msgs._models length:', chat.msgs._models?.length || chat.msgs.getModelsArray?.()?.length || '?');
-                } catch (e) {
-                    console.warn('[wwebjs] chat.msgs inspect failed:', e?.message);
-                }
-
-                // Strategy 1: Try loadRecentMsgs
-                try {
-                    await chatLoadMod.loadRecentMsgs(chat);
-                    console.log('[wwebjs] loadRecentMsgs OK, cache:', chat.msgs.getModelsArray().length);
-                } catch (e) {
-                    console.warn('[wwebjs] loadRecentMsgs FAILED:', e?.message);
-                }
-
-                // Strategy 2: Try loadMsgsPromiseLoop
-                try {
-                    const result = await chatLoadMod.loadMsgsPromiseLoop(chat, chat.msgs, searchOptions?.limit || 50);
-                    console.log('[wwebjs] loadMsgsPromiseLoop OK, returned:', result?.length || 0, 'cache:', chat.msgs.getModelsArray().length);
-                } catch (e) {
-                    console.warn('[wwebjs] loadMsgsPromiseLoop FAILED:', e?.message);
-                }
-
-                // Strategy 3: Try chat.msgs.loadMore / loadEarlierMsgs on collection
-                try {
-                    if (typeof chat.msgs.loadEarlierMsgs === 'function') {
-                        const r = await chat.msgs.loadEarlierMsgs();
-                        console.log('[wwebjs] chat.msgs.loadEarlierMsgs() OK, returned:', r?.length || 0);
-                    } else {
-                        console.log('[wwebjs] chat.msgs.loadEarlierMsgs not a function');
+                    const MsgCollection = window.require('WAWebCollections').Msg;
+                    const globalMsgs = MsgCollection.getModelsArray();
+                    const chatWid = chat.id?._serialized || chat.id?.toString() || chatId;
+                    const chatMsgs = globalMsgs.filter(m => {
+                        const remote = m.id?.remote?._serialized || m.id?.remote?.toString();
+                        return remote === chatWid;
+                    });
+                    console.log('[wwebjs] Global Msg collection:', globalMsgs.length, 'total,', chatMsgs.length, 'for this chat');
+                    if (chatMsgs.length > 0) {
+                        msgs = chatMsgs.filter(msgFilter);
                     }
                 } catch (e) {
-                    console.warn('[wwebjs] chat.msgs.loadEarlierMsgs FAILED:', e?.message);
+                    console.warn('[wwebjs] Global Msg query failed:', e?.message);
                 }
 
-                let msgs = chat.msgs.getModelsArray().filter(msgFilter);
-                console.log('[wwebjs] final cached msgs:', msgs.length, 'limit:', searchOptions?.limit);
+                // Strategy B: Fall back to chat.msgs if global query failed
+                if (msgs.length === 0) {
+                    msgs = chat.msgs.getModelsArray().filter(msgFilter);
+                    console.log('[wwebjs] Fell back to chat.msgs:', msgs.length);
+                }
+
+                // Strategy C: Try IDB if still low count
+                if (msgs.length < 10) {
+                    try {
+                        const idbMsgs = await new Promise((resolve, reject) => {
+                            const req = indexedDB.open('wawc');
+                            req.onerror = () => reject(req.error);
+                            req.onsuccess = () => {
+                                const db = req.result;
+                                const storeNames = Array.from(db.objectStoreNames);
+                                console.log('[wwebjs] IDB stores:', storeNames.join(', '));
+                                // Look for message store
+                                const msgStore = storeNames.find(s => s.toLowerCase().includes('message') || s.toLowerCase().includes('msg'));
+                                if (!msgStore) {
+                                    db.close();
+                                    resolve([]);
+                                    return;
+                                }
+                                console.log('[wwebjs] Found IDB msg store:', msgStore);
+                                const tx = db.transaction(msgStore, 'readonly');
+                                const store = tx.objectStore(msgStore);
+                                const getAll = store.getAll();
+                                getAll.onsuccess = () => {
+                                    const allMsgs = getAll.result || [];
+                                    console.log('[wwebjs] IDB total msgs:', allMsgs.length);
+                                    db.close();
+                                    resolve(allMsgs);
+                                };
+                                getAll.onerror = () => { db.close(); reject(getAll.error); };
+                            };
+                        });
+                        console.log('[wwebjs] IDB query returned:', idbMsgs?.length || 0, 'msgs');
+                    } catch (e) {
+                        console.warn('[wwebjs] IDB query failed:', e?.message);
+                    }
+                }
+
+                console.log('[wwebjs] final msg count:', msgs.length, 'limit:', searchOptions?.limit);
 
                 if (searchOptions && searchOptions.limit > 0) {
-                    let loadAttempt = 0;
-                    while (msgs.length < searchOptions.limit) {
-                        loadAttempt++;
-                        let loadedMessages;
-                        try {
-                            loadedMessages = await chatLoadMod.loadEarlierMsgs(chat, chat.msgs);
-                            console.log('[wwebjs] loadEarlierMsgs attempt', loadAttempt, 'returned', loadedMessages?.length || 0, 'total:', msgs.length);
-                        } catch (e) {
-                            console.warn('[wwebjs] loadEarlierMsgs failed (attempt ' + loadAttempt + '):', e?.message);
-                            break;
-                        }
-                        if (!loadedMessages || !loadedMessages.length) break;
-                        msgs = [...loadedMessages.filter(msgFilter), ...msgs];
-                    }
-                    console.log('[wwebjs] fetchMessages done:', msgs.length, 'msgs after', loadAttempt, 'attempts');
 
                     if (msgs.length > searchOptions.limit) {
                         msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
