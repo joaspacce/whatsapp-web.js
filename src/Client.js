@@ -365,29 +365,20 @@ class Client extends EventEmitter {
 
                     this.interface = new InterfaceController(this);
 
-                    // Patch window.require to intercept undefined modules.
-                    // WhatsApp Web removed a module that provides waitForChatLoading,
-                    // causing loadEarlierMsgs to crash with
-                    // "Cannot read properties of undefined (reading 'waitForChatLoading')".
-                    // This wraps require() so that any module returning undefined
-                    // gets a proxy with no-op async methods instead.
+                    // Debug: log what loadEarlierMsgs depends on internally
                     await this.pupPage.evaluate(() => {
-                        const _origRequire = window.require;
-                        window.require = function (moduleName) {
-                            const result = _origRequire(moduleName);
-                            if (result === undefined) {
-                                console.warn('[wwebjs] require("' + moduleName + '") returned undefined — returning stub');
-                                return new Proxy({}, {
-                                    get: (_, prop) => {
-                                        if (prop === 'then') return undefined; // not a thenable
-                                        return async () => {};
-                                    }
-                                });
+                        try {
+                            const mod = window.require('WAWebChatLoadMessages');
+                            console.log('[wwebjs] WAWebChatLoadMessages:', mod ? 'exists' : 'undefined');
+                            if (mod) {
+                                console.log('[wwebjs] WAWebChatLoadMessages exports:', Object.keys(mod));
+                                // Check loadEarlierMsgs source for clues
+                                const src = mod.loadEarlierMsgs?.toString?.()?.substring(0, 500);
+                                if (src) console.log('[wwebjs] loadEarlierMsgs source (first 500 chars):', src);
                             }
-                            return result;
-                        };
-                        // Preserve any properties on the original require
-                        Object.assign(window.require, _origRequire);
+                        } catch (e) {
+                            console.warn('[wwebjs] Debug probe failed:', e?.message);
+                        }
                     });
 
                     await this.attachEventListeners();
