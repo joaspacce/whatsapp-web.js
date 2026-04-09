@@ -229,7 +229,8 @@ class Chat extends Base {
                             loadedMessages = await window
                                 .require('WAWebChatLoadMessages')
                                 .loadEarlierMsgs(chat, chat.msgs);
-                        } catch (_) {
+                        } catch (e) {
+                            console.warn('[wwebjs] loadEarlierMsgs failed:', e?.message || e);
                             break;
                         }
                         if (!loadedMessages || !loadedMessages.length) break;
