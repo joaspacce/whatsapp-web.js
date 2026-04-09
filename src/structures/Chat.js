@@ -220,29 +220,18 @@ class Chat extends Base {
                 const chat = await window.WWebJS.getChat(chatId, {
                     getAsModel: false,
                 });
+                const chatLoadMod = window.require('WAWebChatLoadMessages');
+
+                // Try loadRecentMsgs first to populate the cache
+                try {
+                    await chatLoadMod.loadRecentMsgs(chat);
+                    console.log('[wwebjs] loadRecentMsgs succeeded, msgs in cache:', chat.msgs.getModelsArray().length);
+                } catch (e) {
+                    console.warn('[wwebjs] loadRecentMsgs failed:', e?.message);
+                }
+
                 let msgs = chat.msgs.getModelsArray().filter(msgFilter);
-                console.log('[wwebjs] fetchMessages: initial cached msgs:', msgs.length, 'limit:', searchOptions?.limit);
-
-                // Debug: log available functions on the chat load module
-                try {
-                    const chatLoadMod = window.require('WAWebChatLoadMessages');
-                    console.log('[wwebjs] WAWebChatLoadMessages keys:', Object.keys(chatLoadMod || {}));
-                    console.log('[wwebjs] WAWebChatLoadMessages type:', typeof chatLoadMod);
-                    if (chatLoadMod?.loadEarlierMsgs) {
-                        console.log('[wwebjs] loadEarlierMsgs exists, type:', typeof chatLoadMod.loadEarlierMsgs);
-                    }
-                } catch (e) {
-                    console.warn('[wwebjs] Could not inspect WAWebChatLoadMessages:', e?.message);
-                }
-
-                // Debug: log available methods on chat.msgs
-                try {
-                    const msgCollProto = Object.getPrototypeOf(chat.msgs);
-                    const msgMethods = Object.getOwnPropertyNames(msgCollProto).filter(k => typeof chat.msgs[k] === 'function');
-                    console.log('[wwebjs] chat.msgs methods:', msgMethods.join(', '));
-                } catch (e) {
-                    console.warn('[wwebjs] Could not inspect chat.msgs:', e?.message);
-                }
+                console.log('[wwebjs] fetchMessages: cached msgs after loadRecentMsgs:', msgs.length, 'limit:', searchOptions?.limit);
 
                 if (searchOptions && searchOptions.limit > 0) {
                     let loadAttempt = 0;
@@ -250,19 +239,16 @@ class Chat extends Base {
                         loadAttempt++;
                         let loadedMessages;
                         try {
-                            loadedMessages = await window
-                                .require('WAWebChatLoadMessages')
-                                .loadEarlierMsgs(chat, chat.msgs);
-                            console.log('[wwebjs] loadEarlierMsgs attempt', loadAttempt, 'returned', loadedMessages?.length || 0, 'msgs, total so far:', msgs.length);
+                            loadedMessages = await chatLoadMod.loadEarlierMsgs(chat, chat.msgs);
+                            console.log('[wwebjs] loadEarlierMsgs attempt', loadAttempt, 'returned', loadedMessages?.length || 0, 'total:', msgs.length);
                         } catch (e) {
-                            console.warn('[wwebjs] loadEarlierMsgs attempt', loadAttempt, 'FAILED:', e?.message || e);
-                            console.warn('[wwebjs] Error stack:', e?.stack?.split('\\n').slice(0, 5).join('\\n'));
+                            console.warn('[wwebjs] loadEarlierMsgs failed (attempt ' + loadAttempt + '):', e?.message);
                             break;
                         }
                         if (!loadedMessages || !loadedMessages.length) break;
                         msgs = [...loadedMessages.filter(msgFilter), ...msgs];
                     }
-                    console.log('[wwebjs] fetchMessages: final count:', msgs.length, 'after', loadAttempt, 'load attempts');
+                    console.log('[wwebjs] fetchMessages done:', msgs.length, 'msgs after', loadAttempt, 'attempts');
 
                     if (msgs.length > searchOptions.limit) {
                         msgs.sort((a, b) => (a.t > b.t ? 1 : -1));
