@@ -221,17 +221,48 @@ class Chat extends Base {
                     getAsModel: false,
                 });
                 const chatLoadMod = window.require('WAWebChatLoadMessages');
+                console.log('[wwebjs] chatLoadMod keys:', Object.keys(chatLoadMod));
 
-                // Try loadRecentMsgs first to populate the cache
+                // Debug: inspect chat.msgs collection methods
+                try {
+                    const proto = Object.getPrototypeOf(chat.msgs);
+                    const methods = Object.getOwnPropertyNames(proto).filter(k => typeof chat.msgs[k] === 'function');
+                    console.log('[wwebjs] chat.msgs methods (' + methods.length + '):', methods.slice(0, 30).join(', '));
+                    console.log('[wwebjs] chat.msgs._models length:', chat.msgs._models?.length || chat.msgs.getModelsArray?.()?.length || '?');
+                } catch (e) {
+                    console.warn('[wwebjs] chat.msgs inspect failed:', e?.message);
+                }
+
+                // Strategy 1: Try loadRecentMsgs
                 try {
                     await chatLoadMod.loadRecentMsgs(chat);
-                    console.log('[wwebjs] loadRecentMsgs succeeded, msgs in cache:', chat.msgs.getModelsArray().length);
+                    console.log('[wwebjs] loadRecentMsgs OK, cache:', chat.msgs.getModelsArray().length);
                 } catch (e) {
-                    console.warn('[wwebjs] loadRecentMsgs failed:', e?.message);
+                    console.warn('[wwebjs] loadRecentMsgs FAILED:', e?.message);
+                }
+
+                // Strategy 2: Try loadMsgsPromiseLoop
+                try {
+                    const result = await chatLoadMod.loadMsgsPromiseLoop(chat, chat.msgs, searchOptions?.limit || 50);
+                    console.log('[wwebjs] loadMsgsPromiseLoop OK, returned:', result?.length || 0, 'cache:', chat.msgs.getModelsArray().length);
+                } catch (e) {
+                    console.warn('[wwebjs] loadMsgsPromiseLoop FAILED:', e?.message);
+                }
+
+                // Strategy 3: Try chat.msgs.loadMore / loadEarlierMsgs on collection
+                try {
+                    if (typeof chat.msgs.loadEarlierMsgs === 'function') {
+                        const r = await chat.msgs.loadEarlierMsgs();
+                        console.log('[wwebjs] chat.msgs.loadEarlierMsgs() OK, returned:', r?.length || 0);
+                    } else {
+                        console.log('[wwebjs] chat.msgs.loadEarlierMsgs not a function');
+                    }
+                } catch (e) {
+                    console.warn('[wwebjs] chat.msgs.loadEarlierMsgs FAILED:', e?.message);
                 }
 
                 let msgs = chat.msgs.getModelsArray().filter(msgFilter);
-                console.log('[wwebjs] fetchMessages: cached msgs after loadRecentMsgs:', msgs.length, 'limit:', searchOptions?.limit);
+                console.log('[wwebjs] final cached msgs:', msgs.length, 'limit:', searchOptions?.limit);
 
                 if (searchOptions && searchOptions.limit > 0) {
                     let loadAttempt = 0;
