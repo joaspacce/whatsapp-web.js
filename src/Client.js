@@ -365,64 +365,29 @@ class Client extends EventEmitter {
 
                     this.interface = new InterfaceController(this);
 
-                    // Polyfill waitForChatLoading — WhatsApp Web removed/moved
-                    // this internal function but loadEarlierMsgs still calls it
-                    // via a broken import chain. Search the webpack module cache
-                    // to find which module expects it and stub the missing dep.
+                    // Patch window.require to intercept undefined modules.
+                    // WhatsApp Web removed a module that provides waitForChatLoading,
+                    // causing loadEarlierMsgs to crash with
+                    // "Cannot read properties of undefined (reading 'waitForChatLoading')".
+                    // This wraps require() so that any module returning undefined
+                    // gets a proxy with no-op async methods instead.
                     await this.pupPage.evaluate(() => {
-                        try {
-                            // Try known module names first
-                            const candidates = [
-                                'WAWebChatLoadMessages',
-                                'WAWebChatLoadUtils',
-                                'WAWebChatCollection',
-                            ];
-                            for (const name of candidates) {
-                                try {
-                                    const mod = window.require(name);
-                                    if (mod && typeof mod === 'object' && !mod.waitForChatLoading) {
-                                        mod.waitForChatLoading = async () => {};
+                        const _origRequire = window.require;
+                        window.require = function (moduleName) {
+                            const result = _origRequire(moduleName);
+                            if (result === undefined) {
+                                console.warn('[wwebjs] require("' + moduleName + '") returned undefined — returning stub');
+                                return new Proxy({}, {
+                                    get: (_, prop) => {
+                                        if (prop === 'then') return undefined; // not a thenable
+                                        return async () => {};
                                     }
-                                } catch (_) {}
+                                });
                             }
-
-                            // Search all webpack modules for any that reference
-                            // waitForChatLoading and ensure the function exists
-                            const cache = window.__webpack_require__?.c
-                                || window.webpackChunkwhatsapp_web_client?.push?.([[],{},e => e])?.c;
-                            if (cache) {
-                                for (const id in cache) {
-                                    try {
-                                        const exports = cache[id]?.exports;
-                                        if (!exports) continue;
-                                        // Check default export and named exports
-                                        const targets = [exports, exports?.default];
-                                        for (const target of targets) {
-                                            if (target && typeof target === 'object') {
-                                                // If any property is undefined but code
-                                                // expects waitForChatLoading on it, we
-                                                // can't fix it here. But if the module
-                                                // itself should have it, stub it.
-                                                if ('waitForChatLoading' in target && !target.waitForChatLoading) {
-                                                    target.waitForChatLoading = async () => {};
-                                                }
-                                            }
-                                        }
-                                    } catch (_) {}
-                                }
-                            }
-
-                            // Also stub on Chat collection prototype
-                            try {
-                                const Chat = window.require('WAWebCollections').Chat;
-                                if (Chat && !Chat.waitForChatLoading) {
-                                    Chat.waitForChatLoading = async () => {};
-                                }
-                                if (Chat?.modelClass?.prototype && !Chat.modelClass.prototype.waitForChatLoading) {
-                                    Chat.modelClass.prototype.waitForChatLoading = async () => {};
-                                }
-                            } catch (_) {}
-                        } catch (_) {}
+                            return result;
+                        };
+                        // Preserve any properties on the original require
+                        Object.assign(window.require, _origRequire);
                     });
 
                     await this.attachEventListeners();
