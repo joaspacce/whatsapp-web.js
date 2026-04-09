@@ -365,21 +365,36 @@ class Client extends EventEmitter {
 
                     this.interface = new InterfaceController(this);
 
-                    // Debug: log what loadEarlierMsgs depends on internally
-                    await this.pupPage.evaluate(() => {
-                        try {
-                            const mod = window.require('WAWebChatLoadMessages');
-                            console.log('[wwebjs] WAWebChatLoadMessages:', mod ? 'exists' : 'undefined');
-                            if (mod) {
-                                console.log('[wwebjs] WAWebChatLoadMessages exports:', Object.keys(mod));
-                                // Check loadEarlierMsgs source for clues
-                                const src = mod.loadEarlierMsgs?.toString?.()?.substring(0, 500);
-                                if (src) console.log('[wwebjs] loadEarlierMsgs source (first 500 chars):', src);
+                    // Forward browser console [wwebjs] messages to Node.js
+                    this.pupPage.on('console', (msg) => {
+                        const text = msg.text();
+                        if (text.includes('[wwebjs]')) {
+                            const type = msg.type();
+                            if (type === 'warning' || type === 'error') {
+                                console.error(text);
+                            } else {
+                                console.log(text);
                             }
-                        } catch (e) {
-                            console.warn('[wwebjs] Debug probe failed:', e?.message);
                         }
                     });
+
+                    // Debug: log what loadEarlierMsgs depends on internally
+                    const debugInfo = await this.pupPage.evaluate(() => {
+                        const info = {};
+                        try {
+                            const mod = window.require('WAWebChatLoadMessages');
+                            info.moduleExists = !!mod;
+                            info.moduleKeys = mod ? Object.keys(mod) : [];
+                            info.loadEarlierMsgsType = typeof mod?.loadEarlierMsgs;
+                            // Get source of loadEarlierMsgs to see internal deps
+                            const src = mod?.loadEarlierMsgs?.toString?.();
+                            info.loadEarlierMsgsSrc = src?.substring(0, 1000) || 'N/A';
+                        } catch (e) {
+                            info.error = e?.message;
+                        }
+                        return info;
+                    });
+                    console.log('[wwebjs] WAWebChatLoadMessages debug:', JSON.stringify(debugInfo, null, 2));
 
                     await this.attachEventListeners();
                 }
